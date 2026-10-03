@@ -524,33 +524,87 @@ function senseMove(dx,dy){
   if(!hit&&wallDistance(next)*scale>10)sensing.armed=true;
   if(hit&&sensing.armed&&storyClock-sensing.lastHit>500){
     sensing.armed=false;sensing.lastHit=storyClock;sensing.count++;
-    sensing.hits.push({x:hit.x,y:hit.y,at:storyClock,angle:Math.atan2(dy,dx)});
+    const contact={x:hit.x,y:hit.y,at:storyClock,angle:Math.atan2(dy,dx),contourAt:contourDistanceAt(hit)};
+    sensing.hits.push(contact);
+    if(sensing.count===1)sensing.bridge=contact;
     if(sensing.count===3){
       narrative('这里有什么。');
       later(COPY_FADE+1000,()=>narrative('你正在看。'));
     }
   }
 }
+function contourGeometry(){
+  const points=path.map(p=>sceneProject(p)),lengths=[0];
+  for(let i=0;i<points.length;i++)lengths.push(lengths[i]+dist(points[i],points[(i+1)%points.length]));
+  return {points,lengths,total:lengths.at(-1)};
+}
+function contourDistanceAt(hit){
+  const {points,lengths}=contourGeometry(),p=sceneProject(hit);let best={distance:Infinity,along:0};
+  for(let i=0;i<points.length;i++){
+    const a=points[i],b=points[(i+1)%points.length],dx=b.x-a.x,dy=b.y-a.y;
+    const t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy||1)));
+    const x=a.x+dx*t,y=a.y+dy*t,distance=Math.hypot(p.x-x,p.y-y);
+    if(distance<best.distance)best={distance,along:lengths[i]+Math.hypot(dx,dy)*t};
+  }
+  return best.along;
+}
+function pointOnContour(geometry,distance){
+  const d=((distance%geometry.total)+geometry.total)%geometry.total;
+  let i=0;while(i<geometry.points.length-1&&geometry.lengths[i+1]<d)i++;
+  const a=geometry.points[i],b=geometry.points[(i+1)%geometry.points.length],span=geometry.lengths[i+1]-geometry.lengths[i];
+  const t=span?(d-geometry.lengths[i])/span:0;
+  return {x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t};
+}
+function drawContourWave(hit,geometry){
+  const age=(storyClock-hit.at)/1000,fade=Math.max(0,1-age/3.2);
+  if(fade<=0)return;
+  const speed=reducedMotion.matches?0:230*age,span=reducedMotion.matches?10:25;
+  for(const direction of [-1,1]){
+    const center=hit.contourAt+direction*speed,steps=7;
+    ctx.beginPath();
+    for(let i=0;i<=steps;i++){
+      const p=pointOnContour(geometry,center-span/2+span*i/steps);
+      if(i)ctx.lineTo(p.x,p.y);else ctx.moveTo(p.x,p.y);
+    }
+    ctx.strokeStyle='rgba(86,151,165,'+(.52*fade)+')';ctx.lineWidth=3.2*fade+.4;
+    ctx.shadowColor='rgba(86,151,165,'+(.42*fade)+')';ctx.shadowBlur=reducedMotion.matches?0:7*fade;
+    ctx.stroke();ctx.shadowBlur=0;
+  }
+}
 function renderSensing(){
   sensing.marks=sensing.marks.filter(p=>storyClock-p.at<1700);
-  sensing.hits=sensing.hits.filter(p=>storyClock-p.at<1500);
+  sensing.hits=sensing.hits.filter(p=>storyClock-p.at<3200);
   ctx.save();ctx.beginPath();ctx.rect(0,0,W*split,H);ctx.clip();
   sensing.marks.forEach(p=>{const age=(storyClock-p.at)/1700;ctx.fillStyle='rgba(91,133,143,'+(.19*(1-age)*(1-age))+')';dot(senseProject(p),1.7)});
   for(const hit of sensing.hits){
-    const life=(storyClock-hit.at)/1500,p=senseProject(hit);
-    const vibration=reducedMotion.matches?0:Math.sin(life*32)*1.4*(1-life);
+    const age=(storyClock-hit.at)/1000,p=senseProject(hit),t=Math.max(0,Math.min(1,age/.42));
+    const length=reducedMotion.matches?8:age<.10?14-9*(age/.10):age<.23?5+10*((age-.10)/.13):15-6*((age-.23)/.19);
+    const dx=Math.cos(hit.angle),dy=Math.sin(hit.angle),alpha=Math.max(0,1-age/.48);
     ctx.save();ctx.translate(p.x,p.y);ctx.rotate(hit.angle);
-    ctx.strokeStyle='rgba(80,125,137,'+(.28*(1-life))+')';ctx.lineWidth=1;
-    ctx.beginPath();ctx.ellipse(vibration,0,2.5,6+(reducedMotion.matches?0:3*Math.sin(life*Math.PI)),0,0,Math.PI*2);ctx.stroke();ctx.restore();
+    ctx.strokeStyle='rgba(80,125,137,'+(.58*alpha)+')';ctx.lineWidth=2.1;
+    ctx.beginPath();ctx.moveTo(-length,0);ctx.quadraticCurveTo(-length*.5,-(reducedMotion.matches?0:2*(1-t)), -2,0);ctx.stroke();
+    ctx.strokeStyle='rgba(80,125,137,'+(.18*alpha)+')';ctx.lineWidth=1;
+    ctx.beginPath();ctx.ellipse(-1,0,2.2,4+5*t,0,0,Math.PI*2);ctx.stroke();ctx.restore();
   }
   ctx.restore();
+  const geometry=contourGeometry();
   ctx.save();ctx.beginPath();ctx.rect(W*split,0,W*(1-split),H);ctx.clip();
   for(const hit of sensing.hits){
-    const life=(storyClock-hit.at)/1500,p=sceneProject(hit);
-    ctx.strokeStyle='rgba(77,127,140,'+(.2*(1-life)*(1-life))+')';ctx.lineWidth=1;
-    ctx.beginPath();ctx.arc(p.x,p.y,reducedMotion.matches?9:3+life*23,0,Math.PI*2);ctx.stroke();
+    drawContourWave(hit,geometry);
   }
   ctx.restore();
+  if(sensing.bridge){
+    const age=storyClock-sensing.bridge.at;
+    if(age<400){
+      const a=senseProject(sensing.bridge),b=sceneProject(sensing.bridge),dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy)||1;
+      const tension=Math.sin(Math.PI*age/400),flicker=reducedMotion.matches?0:Math.sin(age*.11)*3*(1-age/400);
+      const alpha=(1-age/400)*.76;
+      ctx.save();ctx.strokeStyle='rgba(71,119,131,'+alpha+')';ctx.lineWidth=1.15;
+      ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo((a.x+b.x)/2-(dy/len)*flicker,(a.y+b.y)/2+(dx/len)*flicker,b.x,b.y);ctx.stroke();
+      for(const p of [a,b]){ctx.fillStyle='rgba(71,119,131,'+(alpha*.7)+')';dot(p,1.8+tension)}
+      ctx.restore();
+    }else sensing.bridge=null;
+  }
 }
 function renderInterior(){
   if(stage!==3||!(flow==='empty'||flow==='empty-tap'))return;
