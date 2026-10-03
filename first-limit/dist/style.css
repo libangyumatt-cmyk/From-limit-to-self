@@ -16,14 +16,15 @@
 @media(max-height:640px){#copy-stack{min-height:118px}.narrative-title{font-size:23px;margin-bottom:8px}.narrative-hint{font-size:12px}#actions{margin-top:10px}#narrative{bottom:60px}}
 #chapter{border:0;background:transparent;border-radius:4px;padding:6px 0;min-height:36px;font-size:12px;color:inherit}
 #chapter:hover{background:#f3f6f6}
-#route-panel{display:grid;grid-template-columns:minmax(0,1fr);gap:4px 0;margin:0 0 26px;padding:18px 0 14px;border-top:1px solid #e5ebec;border-bottom:1px solid #e5ebec}
+#route-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 0;margin:0 0 26px;padding:18px 0 14px;border-top:1px solid #e5ebec;border-bottom:1px solid #e5ebec}
 #route-heading,#route-nodes,#route-status{grid-column:1/-1}
 #route-heading{margin:0 0 14px}
-#route-nodes{display:flex;min-width:0;width:100%;max-width:100%;list-style:none;padding:0 0 8px;margin:0;scrollbar-color:#bdcbcd transparent;scroll-snap-type:x proximity}
-#route-nodes li{position:relative;flex:0 1 160px;text-align:left}
+#route-nodes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-width:0;width:100%;max-width:100%;list-style:none;padding:0;margin:0}
+#route-nodes li{position:relative;min-width:0;text-align:center}
 #route-nodes button{position:relative;z-index:1;width:calc(100% - 8px);padding:8px 5px;font-size:13px;border-color:transparent;background:#fff;white-space:nowrap}
 #route-nodes button:disabled{cursor:default;opacity:.45}
 #route-nodes button.is-locked{filter:blur(3px);opacity:.48}
 #route-nodes button.is-current{border-color:#8fa9ad;background:#f5f8f8;color:#264e55}
-#route-marker{grid-column:1;margin:5px 0 0;text-align:center;font-size:11px;white-space:nowrap;color:#52747a;transition:grid-column .3s}
+#route-marker{grid-column:1/-1;width:50%;margin:5px 0 0;transform:translateX(0);text-align:center;font-size:11px;white-space:nowrap;color:#52747a;transition:transform .48s cubic-bezier(.22,.75,.24,1)}
+#route-panel[data-current-chapter="limitation"] #route-marker{transform:translateX(100%)}
 #route-status{font-size:12px;color:#708084;margin:6px 0 0}

@@ -75,6 +75,7 @@ function narrative(title,eyebrow='',hint='',animate=true){
   $('hint').textContent=hint;$('hint').hidden=!hint;
 }
 function showRoute(){
+  $('route-panel').dataset.currentChapter=activeChapter;
   $('chapter').textContent='《先验观念论体系》 · '+(activeChapter==='limitation'?'限定':'活动');
   document.querySelectorAll('[data-route="activity"]').forEach(node=>{
     node.disabled=false;node.classList.toggle('is-current',activeChapter==='activity');
