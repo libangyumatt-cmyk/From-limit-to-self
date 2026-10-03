@@ -15,6 +15,7 @@ let storyClock=0, storyTasks=[], copyBlend=null;
 let search={phase:'first',distance:0,time:0,touched:false};
 let unfolding=null, seamAt=null, namesAt=null;
 let limitUnlocked=false;
+let activeChapter='activity';
 
 const stamped = p => ({...p,t:performance.now()});
 const opacity = (p,t) => Math.max(0,Math.min(1,(MARK_LIFE-(t-p.t))/(MARK_LIFE-MARK_HOLD)));
@@ -74,20 +75,27 @@ function narrative(title,eyebrow='',hint='',animate=true){
   $('hint').textContent=hint;$('hint').hidden=!hint;
 }
 function showRoute(){
-  $('chapter').textContent=limitUnlocked?'《先验观念论体系》 · 限定':'《先验观念论体系》 · 交互序章';
+  $('chapter').textContent='《先验观念论体系》 · '+(activeChapter==='limitation'?'限定':'活动');
+  document.querySelectorAll('[data-route="activity"]').forEach(node=>{
+    node.disabled=false;node.classList.toggle('is-current',activeChapter==='activity');
+    node.setAttribute('aria-current',activeChapter==='activity'?'page':'false');
+  });
   document.querySelectorAll('[data-route="limitation"]').forEach(node=>{
     node.disabled=!limitUnlocked;node.textContent=limitUnlocked?'限定':'？';
     node.classList.toggle('is-locked',!limitUnlocked);
-    node.classList.toggle('is-current',limitUnlocked);
-    node.setAttribute('aria-current',limitUnlocked?'page':'false');
+    node.classList.toggle('is-current',activeChapter==='limitation'&&limitUnlocked);
+    node.setAttribute('aria-current',activeChapter==='limitation'&&limitUnlocked?'page':'false');
   });
-  $('route-marker').textContent=limitUnlocked?'↑ 本章已完成，可以重新进入':'限定将在两个观看位置显现后解锁';
-  $('route-status').textContent=limitUnlocked?'点击“限定”从头重走这一章节。':'这一章仍在展开。';
+  $('route-marker').textContent='↑ 你正在经历：'+(activeChapter==='limitation'?'限定':'活动');
+  $('route-status').textContent='活动从自由探索开始；限定从第一次画出界限开始。未完成的章节仍留在问号里。';
 }
 function unlockLimitation(){limitUnlocked=true;showRoute()}
+document.querySelectorAll('[data-route="activity"]').forEach(node=>node.addEventListener('click',()=>{
+  $('info').close();activeChapter='activity';reset();
+}));
 document.querySelectorAll('[data-route="limitation"]').forEach(node=>node.addEventListener('click',()=>{
   if(!limitUnlocked)return;
-  $('info').close();reset();
+  $('info').close();reset();activeChapter='limitation';setStage(2);showRoute();
 }));
 function releasePointer(){
   if(activeId!==null&&canvas.hasPointerCapture(activeId))canvas.releasePointerCapture(activeId);
@@ -227,6 +235,9 @@ function start(p){
   expireMarks(performance.now());pointer=clean(p);
   if(stage===0){setStage(1);path=[stamped(pointer)]}
   else if(stage===1||stage===2){
+    if(stage===2&&flow==='boundary'&&activeChapter!=='limitation'){
+      activeChapter='limitation';showRoute();
+    }
     if(!path.length||dist(path[path.length-1],pointer)>.004)path.push(stamped(pointer));
   }else if(stage===3){
     if(flow==='move'){
@@ -358,6 +369,7 @@ $('undo').onclick=()=>{
 };
 function reset(){
   clearStory();releasePointer();camera={x:0,y:0,zoom:1};cameraTween=null;
+  activeChapter='activity';
   path=[];stroke=[];ink=[];trail=[];travel=0;
   pointer={x:.5,y:.4};split=.5;gridOpacity=0;outlinePan=0;outlineDiscovered=false;
   search={phase:'first',distance:0,time:0,touched:false};
