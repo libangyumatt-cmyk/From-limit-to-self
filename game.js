@@ -121,7 +121,7 @@ function setStage(s,preserveGesture=false){
       flow='watcher';seamAt=storyClock;$('seam').hidden=false;
       later(1000,()=>{
         narrative('而你正在看着它。');
-        later(COPY_FADE+1100,()=>{
+        later(COPY_FADE+2000,()=>{
           namesAt=storyClock;$('views').hidden=false;
           later(2600,()=>{
             flow='views';narrative('你正在看。');
