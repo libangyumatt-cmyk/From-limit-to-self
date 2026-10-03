@@ -16,6 +16,7 @@ let search={phase:'first',distance:0,time:0,touched:false};
 let unfolding=null, seamAt=null, namesAt=null;
 let limitUnlocked=false;
 let activeChapter='activity';
+let sensing=null;
 
 const stamped = p => ({...p,t:performance.now()});
 const opacity = (p,t) => Math.max(0,Math.min(1,(MARK_LIFE-(t-p.t))/(MARK_LIFE-MARK_HOLD)));
@@ -101,9 +102,10 @@ document.querySelectorAll('[data-route="limitation"]').forEach(node=>node.addEve
 function releasePointer(){
   if(activeId!==null&&canvas.hasPointerCapture(activeId))canvas.releasePointerCapture(activeId);
   activeId=null;down=false;draggingOutline=false;stroke=[];
+  if(sensing)sensing.input=null;
 }
 function setStage(s,preserveGesture=false){
-  clearStory();if(!preserveGesture)releasePointer();stage=s;flow='';emptyPulse=null;
+  clearStory();if(!preserveGesture)releasePointer();stage=s;flow='';emptyPulse=null;sensing=null;
   unfolding=null;seamAt=null;namesAt=null;
   $('game').dataset.stage=String(s);$('primary').hidden=true;$('undo').hidden=true;
   $('phase').textContent=String(s+1).padStart(2,'0')+' · '+labels[s];
@@ -152,7 +154,7 @@ function setStage(s,preserveGesture=false){
           namesAt=storyClock;$('views').hidden=false;
           later(2600,()=>{
             flow='views';narrative('你正在看。');
-            button('回看刚才发生了什么',()=>$('info').showModal());
+            sensing={position:center(),input:null,marks:[],hits:[],count:0,armed:true,lastHit:-Infinity,moved:0,quiet:false};
           });
         });
       });
@@ -207,6 +209,7 @@ function tickStory(dt){
 }
 function button(text,fn){$('primary').textContent=text;$('primary').hidden=false;$('primary').onclick=fn}
 function resize(){
+  if(sensing)sensing.input=null;
   W=canvas.clientWidth;H=canvas.clientHeight;dpr=Math.min(devicePixelRatio||1,2);
   canvas.width=W*dpr;canvas.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
 }
@@ -337,7 +340,10 @@ function closePath(){
   camera={x:0,y:0,zoom:1};trail=[];stroke=[];setStage(3);
 }
 canvas.addEventListener('pointerdown',e=>{
-  if(stage===5)return;
+  if(stage===5){
+    if(!sensing||activeId!==null||e.clientX-canvas.getBoundingClientRect().left>=W*split)return;
+    canvas.focus({preventScroll:true});activeId=e.pointerId;canvas.setPointerCapture(e.pointerId);senseInput(e);return;
+  }
   if(activeId!==null)return;
   canvas.focus({preventScroll:true});
   start(pos(e));
@@ -345,12 +351,13 @@ canvas.addEventListener('pointerdown',e=>{
 });
 canvas.addEventListener('pointermove',e=>{
   if(activeId!==null&&activeId!==e.pointerId)return;
-  if(stage!==5)move(pos(e));
+  if(stage===5)senseInput(e);else move(pos(e));
 });
 canvas.addEventListener('pointerup',e=>{
   if(activeId!==e.pointerId)return;
   finish();releasePointer();
 });
+canvas.addEventListener('pointerleave',()=>{if(sensing)sensing.input=null;canvas.style.cursor=stage===5?'default':canvas.style.cursor});
 function cancelGesture(){
   releasePointer();
   if(stage===4&&flow==='drawing'&&ink.length)button('保留这个形象',finishCreation);
@@ -391,6 +398,7 @@ $('info').addEventListener('click',e=>{
   }
 });
 function setSplit(x){
+  if(sensing)sensing.input=null;
   split=Math.max(.25,Math.min(.75,x));$('seam').style.left=split*100+'%';
   $('seam').setAttribute('aria-valuenow',Math.round(split*100));
   $('views').style.gridTemplateColumns=split+'fr '+(1-split)+'fr';
@@ -406,7 +414,14 @@ $('seam').addEventListener('keydown',e=>{
 });
 window.addEventListener('keydown',e=>{
   if($('info').open||e.target.tagName==='BUTTON'||e.target===$('seam'))return;
-  if(stage===5||!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Enter'].includes(e.key))return;
+  if(stage===5){
+    if(sensing&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){
+      e.preventDefault();sensing.input=null;
+      senseMove((e.key==='ArrowRight'?12:0)-(e.key==='ArrowLeft'?12:0),(e.key==='ArrowDown'?12:0)-(e.key==='ArrowUp'?12:0));
+    }
+    return;
+  }
+  if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Enter'].includes(e.key))return;
   e.preventDefault();
   if(e.key===' '){
     if(down)finish();else start(pointer);
@@ -452,6 +467,81 @@ function renderViews(){
     ctx.save();ctx.globalAlpha=1-t;drawScene(project);
     ctx.globalAlpha=t;drawScene(p=>sceneProject(p));ctx.restore();
   }else drawScene(p=>sceneProject(p,t));
+  if(sensing)renderSensing();
+}
+// The left view shares the drawn polygon's coordinates, but never renders its walls.
+function senseLayout(){
+  const b=bounds(),dx=Math.max(.001,b.maxX-b.minX),dy=Math.max(.001,b.maxY-b.minY);
+  const bx=drawBox();
+  const fit=Math.min(Math.max(24,W*split-48)/(dx*bx.w),bx.h/(dy*bx.h));
+  const scaleX=bx.w*fit,scaleY=bx.h*fit;
+  return {scale:Math.min(scaleX,scaleY),scaleX,scaleY,x:W*split/2,y:bx.y+bx.h/2,cx:(b.minX+b.maxX)/2,cy:(b.minY+b.maxY)/2};
+}
+function senseProject(p){
+  const b=senseLayout();return {x:b.x+(p.x-b.cx)*b.scaleX,y:b.y+(p.y-b.cy)*b.scaleY};
+}
+// Stop at the first crossed segment, including a concavity even if the target is inside again.
+function firstContact(from,to){
+  const d={x:to.x-from.x,y:to.y-from.y};let best=null;
+  for(let i=0;i<path.length;i++){
+    const a=path[i],b=path[(i+1)%path.length],ex=b.x-a.x,ey=b.y-a.y;
+    const den=d.x*ey-d.y*ex;if(Math.abs(den)<1e-12)continue;
+    const ax=a.x-from.x,ay=a.y-from.y;
+    const t=(ax*ey-ay*ex)/den,u=(ax*d.y-ay*d.x)/den;
+    if(t>=0&&t<=1&&u>=-1e-9&&u<=1+1e-9&&(!best||t<best.t))best={t,x:from.x+d.x*t,y:from.y+d.y*t};
+  }
+  return best;
+}
+function senseInput(e){
+  if(!sensing||$('info').open||document.hidden||seamHeld)return;
+  const r=canvas.getBoundingClientRect(),p={x:e.clientX-r.left,y:e.clientY-r.top};
+  if(p.x<0||p.x>=W*split||p.y<0||p.y>H){sensing.input=null;canvas.style.cursor='default';return}
+  canvas.style.cursor='none';
+  const previous=sensing.input;sensing.input=p;
+  if(previous)senseMove(p.x-previous.x,p.y-previous.y);
+}
+function senseMove(dx,dy){
+  if(!sensing||$('info').open||document.hidden)return;
+  const length=Math.hypot(dx,dy);if(length<.01)return;
+  const {scale,scaleX,scaleY}=senseLayout(),from=sensing.position;
+  const target={x:from.x+dx/scaleX,y:from.y+dy/scaleY},hit=firstContact(from,target);
+  let next=target;
+  if(hit){
+    const fraction=Math.max(0,hit.t-.25/length);
+    next={x:from.x+(target.x-from.x)*fraction,y:from.y+(target.y-from.y)*fraction};
+  }else if(!inside(target))next=from;
+  const moved=Math.hypot((next.x-from.x)*scaleX,(next.y-from.y)*scaleY);
+  const steps=Math.min(100,Math.ceil(moved/4));
+  for(let i=1;i<=steps;i++)sensing.marks.push({x:from.x+(next.x-from.x)*i/steps,y:from.y+(next.y-from.y)*i/steps,at:storyClock});
+  sensing.marks=sensing.marks.slice(-450);sensing.position=next;sensing.moved+=moved;
+  if(!sensing.quiet&&sensing.moved>18){sensing.quiet=true;narrative('')}
+  if(!hit&&wallDistance(next)*scale>10)sensing.armed=true;
+  if(hit&&sensing.armed&&storyClock-sensing.lastHit>500){
+    sensing.armed=false;sensing.lastHit=storyClock;sensing.count++;
+    sensing.hits.push({x:hit.x,y:hit.y,at:storyClock,angle:Math.atan2(dy,dx)});
+    if(sensing.count===3)narrative('这里有什么。');
+  }
+}
+function renderSensing(){
+  sensing.marks=sensing.marks.filter(p=>storyClock-p.at<1700);
+  sensing.hits=sensing.hits.filter(p=>storyClock-p.at<1500);
+  ctx.save();ctx.beginPath();ctx.rect(0,0,W*split,H);ctx.clip();
+  sensing.marks.forEach(p=>{const age=(storyClock-p.at)/1700;ctx.fillStyle='rgba(91,133,143,'+(.19*(1-age)*(1-age))+')';dot(senseProject(p),1.7)});
+  for(const hit of sensing.hits){
+    const life=(storyClock-hit.at)/1500,p=senseProject(hit);
+    const vibration=reducedMotion.matches?0:Math.sin(life*32)*1.4*(1-life);
+    ctx.save();ctx.translate(p.x,p.y);ctx.rotate(hit.angle);
+    ctx.strokeStyle='rgba(80,125,137,'+(.28*(1-life))+')';ctx.lineWidth=1;
+    ctx.beginPath();ctx.ellipse(vibration,0,2.5,6+(reducedMotion.matches?0:3*Math.sin(life*Math.PI)),0,0,Math.PI*2);ctx.stroke();ctx.restore();
+  }
+  ctx.restore();
+  ctx.save();ctx.beginPath();ctx.rect(W*split,0,W*(1-split),H);ctx.clip();
+  for(const hit of sensing.hits){
+    const life=(storyClock-hit.at)/1500,p=sceneProject(hit);
+    ctx.strokeStyle='rgba(77,127,140,'+(.2*(1-life)*(1-life))+')';ctx.lineWidth=1;
+    ctx.beginPath();ctx.arc(p.x,p.y,reducedMotion.matches?9:3+life*23,0,Math.PI*2);ctx.stroke();
+  }
+  ctx.restore();
 }
 function renderInterior(){
   if(stage!==3||!(flow==='empty'||flow==='empty-tap'))return;
