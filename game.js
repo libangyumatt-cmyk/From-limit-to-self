@@ -77,7 +77,8 @@ function narrative(title,eyebrow='',hint='',animate=true){
 }
 function showRoute(){
   $('route-panel').dataset.currentChapter=activeChapter;
-  $('chapter').textContent='《先验观念论体系》 · '+(activeChapter==='limitation'?'限定':'活动');
+  const chapterName=activeChapter==='limitation'?'限定':activeChapter==='intuition'?'？':'活动';
+  $('chapter').textContent='《先验观念论体系》 · '+chapterName;
   document.querySelectorAll('[data-route="activity"]').forEach(node=>{
     node.disabled=false;node.classList.toggle('is-current',activeChapter==='activity');
     node.setAttribute('aria-current',activeChapter==='activity'?'page':'false');
@@ -88,8 +89,13 @@ function showRoute(){
     node.classList.toggle('is-current',activeChapter==='limitation'&&limitUnlocked);
     node.setAttribute('aria-current',activeChapter==='limitation'&&limitUnlocked?'page':'false');
   });
-  $('route-marker').textContent='↑ 你正在经历：'+(activeChapter==='limitation'?'限定':'活动');
-  $('route-status').textContent='活动从自由探索开始；限定从第一次画出界限开始。未完成的章节仍留在问号里。';
+  document.querySelectorAll('[data-route="intuition"]').forEach(node=>{
+    node.disabled=true;node.textContent='？';
+    node.classList.toggle('is-current',activeChapter==='intuition');
+    node.setAttribute('aria-current',activeChapter==='intuition'?'step':'false');
+  });
+  $('route-marker').textContent='↑ 当前：'+chapterName;
+  $('route-status').textContent=activeChapter==='intuition'?'自我直观正在展开；完成后再为这一章命名。':'活动从自由探索开始；限定从第一次画出界限开始。问号表示尚未完成的部分。';
 }
 function unlockLimitation(){limitUnlocked=true;showRoute()}
 document.querySelectorAll('[data-route="activity"]').forEach(node=>node.addEventListener('click',()=>{
@@ -153,7 +159,7 @@ function setStage(s,preserveGesture=false){
         later(COPY_FADE+2000,()=>{
           namesAt=storyClock;$('views').hidden=false;
           later(2600,()=>{
-            flow='views';narrative('你正在看。');
+            flow='views';activeChapter='intuition';showRoute();narrative('你正在看。');
             sensing={position:center(),input:null,marks:[],hits:[],count:0,armed:true,lastHit:-Infinity,moved:0,quiet:false};
           });
         });
