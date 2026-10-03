@@ -2,7 +2,8 @@
 const $ = id => document.getElementById(id);
 const canvas = $('field'), ctx = canvas.getContext('2d');
 const labels = ['活动', '探索', '界限', '轮廓', '创造', '视角'];
-const MARK_HOLD = 3000, MARK_LIFE = 12000, DISCOVERY_DISTANCE = .12;
+const MARK_HOLD = 3000, MARK_LIFE = 12000, OUTLINE_DISCOVERY_DISTANCE = .12;
+const SEARCH_DISTANCE = .28, SEARCH_TIME = 1.4;
 const COPY_FADE = 1350;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let W=0, H=0, dpr=1, stage=0, flow='', path=[], ink=[], stroke=[], trail=[];
@@ -11,6 +12,7 @@ let pointer={x:.5,y:.4}, travel=0, lastTime=0, held=new Set(), noticeUntil=0;
 let camera={x:0,y:0,zoom:1}, cameraTween=null, draggingOutline=false;
 let outlinePan=0, outlineDiscovered=false, gridOpacity=0, emptyPulse=null;
 let storyClock=0, storyTasks=[], copyBlend=null;
+let search={phase:'first',distance:0,time:0,touched:false};
 
 const stamped = p => ({...p,t:performance.now()});
 const opacity = (p,t) => Math.max(0,Math.min(1,(MARK_LIFE-(t-p.t))/(MARK_LIFE-MARK_HOLD)));
@@ -84,9 +86,17 @@ function setStage(s,preserveGesture=false){
   $('phase').textContent=String(s+1).padStart(2,'0')+' · '+labels[s];
   $('notice').textContent='';noticeUntil=0;
   if(s===0)narrative('先动起来。','还没有一个形状替你作答','移动鼠标，或用手指划过空白。',false);
-  if(s===1)narrative('一个点。','一次停留，留下了一处','从这里继续探索。拖动到画面边缘，看看空白是否有尽头。',false);
+  if(s===1){
+    search={phase:'first',distance:0,time:0,touched:false};
+    narrative('一个点。','一次停留，留下了一处','从这里继续探索。拖动到画面边缘，看看空白是否有尽头。',false);
+  }
   if(s===2){
-    narrative('这里没有现成的边缘。','你已经走到画面之外','现在试着亲手画出一个界限；回到起点，把它闭合。线条会随时间消散。',false);
+    flow='discovery';
+    narrative('这里没有现成的边缘。');
+    later(COPY_FADE+1800,()=>{
+      flow='boundary';path=down?[stamped(pointer)]:[];
+      narrative('如果需要一个边缘，就只能由你来画。','','画出一条线，回到起点，把它闭合。线条会随时间消散。');
+    });
     $('undo').hidden=false;
   }
   if(s===3){
@@ -178,10 +188,10 @@ function expireMarks(t){
   if(!path.length){
     stroke=[];
     if(down)path.push(stamped(pointer));
-    else if(hadMarks&&stage===2)say('刚才的界限已消散。从这里重新画一条界限。');
+    else if(hadMarks&&stage===2&&flow==='boundary')say('刚才的界限已消散。从这里重新画一条界限。');
   }
   if(stage===2){
-    if(path.length>4&&!down)button('连接起点，闭合轮廓',closePath);
+    if(flow==='boundary'&&path.length>4&&!down)button('连接起点，闭合轮廓',closePath);
     else $('primary').hidden=true;
   }
 }
@@ -234,15 +244,29 @@ function move(p){
 function panAtEdge(dt){
   if(!down||$('info').open||document.hidden||!(stage<3||(stage===3&&draggingOutline)))return;
   const p=project(pointer),b=drawBox(),margin=Math.min(90,W*.14,H*.14);
+  // A second search needs a deliberate return: release, or move back into the
+  // interior before approaching an edge again. Holding one edge never counts twice.
+  if(stage===1&&search.phase==='between'&&p.x>margin+24&&p.x<W-margin-24&&p.y>margin+24&&p.y<H-margin-24){
+    search.phase='second';search.distance=0;search.time=0;
+  }
   const speed=(v,size)=>v<margin?-Math.min(1,(margin-v)/margin):v>size-margin?Math.min(1,(v-size+margin)/margin):0;
   const dx=speed(p.x,W)*360*dt/(b.w*camera.zoom),dy=speed(p.y,H)*360*dt/(b.h*camera.zoom);
   if(!dx&&!dy)return;
   camera.x+=dx;camera.y+=dy;move({x:pointer.x+dx,y:pointer.y+dy});
-  if(stage===1&&Math.hypot(camera.x,camera.y)>=DISCOVERY_DISTANCE){
-    setStage(2,true);path=[stamped(pointer)];
+  if(stage===1){
+    if(!search.touched){search.touched=true;narrative('')}
+    if(search.phase==='first'||search.phase==='second'){
+      // Viewport-relative distance makes vertical, horizontal and mobile searches comparable.
+      search.distance+=Math.hypot(dx*b.w*camera.zoom/W,dy*b.h*camera.zoom/H);
+      search.time+=dt;
+      if(search.distance>=SEARCH_DISTANCE&&search.time>=SEARCH_TIME){
+        if(search.phase==='first')search.phase='between';
+        else {search.phase='done';setStage(2,true)}
+      }
+    }
   }else if(stage===3&&draggingOutline){
     outlinePan+=Math.hypot(dx,dy);
-    if(outlinePan>=DISCOVERY_DISTANCE&&!outlineDiscovered){
+    if(outlinePan>=OUTLINE_DISCOVERY_DISTANCE&&!outlineDiscovered){
       outlineDiscovered=true;say('还可以继续。松手，看看轮廓里面。');
     }
   }
@@ -250,7 +274,9 @@ function panAtEdge(dt){
 function finish(){
   if(!down)return;
   down=false;expireMarks(performance.now());
-  if(stage===2){
+  if(stage===1&&search.phase==='between'){
+    search.phase='second';search.distance=0;search.time=0;
+  }else if(stage===2&&flow==='boundary'){
     $('undo').hidden=false;
     if(path.length>5&&measure(path)>.6&&dist(path[0],path[path.length-1])<.09)closePath();
     else if(path.length>4)button('连接起点，闭合轮廓',closePath);
@@ -263,6 +289,7 @@ function finish(){
   }else stroke=[];
 }
 function closePath(){
+  if(stage===2&&flow!=='boundary')return;
   expireMarks(performance.now());
   if(stage!==2||path.length<4||area(path)<.035){say('轮廓已经消散，或还太小。继续画，围出一个区域。');return}
   const b=bounds(),size=Math.max(b.maxX-b.minX,b.maxY-b.minY);
@@ -309,6 +336,7 @@ function reset(){
   clearStory();releasePointer();camera={x:0,y:0,zoom:1};cameraTween=null;
   path=[];stroke=[];ink=[];trail=[];held.clear();travel=0;
   pointer={x:.5,y:.4};split=.5;gridOpacity=0;outlinePan=0;outlineDiscovered=false;
+  search={phase:'first',distance:0,time:0,touched:false};
   document.body.classList.remove('split');
   ['views','seam','movement','reflection'].forEach(id=>$(id).hidden=true);
   $('seam').style.left='50%';$('seam').setAttribute('aria-valuenow','50');
