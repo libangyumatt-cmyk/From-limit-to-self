@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const canvas = $('field'), ctx = canvas.getContext('2d');
 const labels = ['活动', '探索', '界限', '轮廓', '创造', '视角'];
 const MARK_HOLD = 3000, MARK_LIFE = 12000, DISCOVERY_DISTANCE = .12;
-const COPY_FADE = 1100, CREATION_PAUSE = 3000;
+const COPY_FADE = 1350, CREATION_PAUSE = 3000;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let W=0, H=0, dpr=1, stage=0, flow='', path=[], ink=[], stroke=[], trail=[];
 let down=false, activeId=null, split=.5, player={x:.5,y:.4,a:-Math.PI/2};
@@ -145,8 +145,8 @@ function tickStory(dt){
   }
   if(copyBlend){
     const elapsed=storyClock-copyBlend.at;
-    $('copy-ghost').style.opacity=String(1-smooth(elapsed/700));
-    $('copy').style.opacity=String(smooth((elapsed-170)/930));
+    $('copy-ghost').style.opacity=String(1-smooth(elapsed/520));
+    $('copy').style.opacity=String(smooth((elapsed-620)/730));
     if(elapsed>=COPY_FADE){
       copyBlend=null;$('copy-ghost').replaceChildren();$('copy').style.opacity='1';
     }
@@ -422,9 +422,10 @@ function renderGrid(){
   ctx.restore();
 }
 function frame(t){
-  const dt=lastTime?Math.min((t-lastTime)/1000,.04):0;lastTime=t;
+  const elapsed=lastTime?(t-lastTime)/1000:0;
+  const dt=Math.min(elapsed,.04);lastTime=t;
   if(!document.hidden&&!$('info').open){
-    tickStory(dt);expireMarks(t);panAtEdge(dt);
+    tickStory(elapsed);expireMarks(t);panAtEdge(dt);
     if(stage===5){
       if(held.has('left'))player.a-=dt*1.8;if(held.has('right'))player.a+=dt*1.8;
       if(held.has('forward'))walk(dt*.17);if(held.has('back'))walk(-dt*.13);
