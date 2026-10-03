@@ -7,12 +7,13 @@ const SEARCH_DISTANCE = .28, SEARCH_TIME = 1.4;
 const COPY_FADE = 1350;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let W=0, H=0, dpr=1, stage=0, flow='', path=[], ink=[], stroke=[], trail=[];
-let down=false, activeId=null, split=.5, player={x:.5,y:.4,a:-Math.PI/2};
-let pointer={x:.5,y:.4}, travel=0, lastTime=0, held=new Set(), noticeUntil=0;
+let down=false, activeId=null, split=.5;
+let pointer={x:.5,y:.4}, travel=0, lastTime=0, noticeUntil=0;
 let camera={x:0,y:0,zoom:1}, cameraTween=null, draggingOutline=false;
 let outlinePan=0, outlineDiscovered=false, gridOpacity=0, emptyPulse=null;
 let storyClock=0, storyTasks=[], copyBlend=null;
 let search={phase:'first',distance:0,time:0,touched:false};
+let unfolding=null, seamAt=null, namesAt=null;
 
 const stamped = p => ({...p,t:performance.now()});
 const opacity = (p,t) => Math.max(0,Math.min(1,(MARK_LIFE-(t-p.t))/(MARK_LIFE-MARK_HOLD)));
@@ -50,11 +51,6 @@ function center(){
   }
   return clean(best);
 }
-function objectPosition(){
-  const all=ink.flat(),b=bounds(all),p={x:(b.minX+b.maxX)/2,y:(b.minY+b.maxY)/2};
-  if(inside(p)&&wallDistance(p)>.015)return p;
-  return clean(all.find(v=>inside(v)&&wallDistance(v)>.015)||center());
-}
 function say(text){
   $('notice').textContent=text;noticeUntil=performance.now()+3800;
 }
@@ -82,6 +78,7 @@ function releasePointer(){
 }
 function setStage(s,preserveGesture=false){
   clearStory();if(!preserveGesture)releasePointer();stage=s;flow='';emptyPulse=null;
+  unfolding=null;seamAt=null;namesAt=null;
   $('game').dataset.stage=String(s);$('primary').hidden=true;$('undo').hidden=true;
   $('phase').textContent=String(s+1).padStart(2,'0')+' · '+labels[s];
   $('notice').textContent='';noticeUntil=0;
@@ -105,7 +102,7 @@ function setStage(s,preserveGesture=false){
     narrative('这就是你。');
     later(COPY_FADE+1600,()=>{
       flow='move';canvas.style.cursor='grab';
-      narrative('……或者，只是你所能看见的你？','','按住轮廓内部，拖向画面边缘，看看它能去哪里。');
+      narrative('……或者，只是你所能看见的你？','','这个轮廓能去哪里？');
     });
   }
   if(s===4){
@@ -113,12 +110,26 @@ function setStage(s,preserveGesture=false){
     narrative('给这个界限一个位置。','','在里面画一个点、符号或人。可以分几笔；完成后，选择“保留这个形象”。');
   }
   if(s===5){
-    flow='views';canvas.style.cursor='default';
-    document.body.classList.add('split');
-    ['views','seam','movement','reflection'].forEach(id=>$(id).hidden=false);
-    $('help').hidden=true;player={...objectPosition(),a:-Math.PI/2};
-    narrative('而你正在看着它。','','左边从这个位置看；右边看见处在界限之内的形象。',false);
-    button('回看刚才发生了什么',()=>$('info').showModal());
+    flow='opening';canvas.style.cursor='default';
+    const duration=reducedMotion.matches?900:6200;
+    unfolding={at:storyClock,duration,reduced:reducedMotion.matches};
+    $('reflection').hidden=false;$('help').hidden=true;
+    $('views').hidden=true;$('seam').hidden=true;
+    $('views').style.opacity='0';$('seam').style.opacity='0';
+    narrative('');
+    later(duration,()=>{
+      flow='watcher';seamAt=storyClock;$('seam').hidden=false;
+      later(1000,()=>{
+        narrative('而你正在看着它。');
+        later(COPY_FADE+1100,()=>{
+          namesAt=storyClock;$('views').hidden=false;
+          later(2600,()=>{
+            flow='views';narrative('你正在看。');
+            button('回看刚才发生了什么',()=>$('info').showModal());
+          });
+        });
+      });
+    });
   }
   if(s<3)canvas.style.cursor='crosshair';
 }
@@ -132,7 +143,7 @@ function revealEmptyInterior(){
     narrative('界限已经存在。');
     later(COPY_FADE+1400,()=>{
       flow='empty';canvas.style.cursor='pointer';
-      narrative('但什么被限定了？','界限已经存在。','点一点轮廓的内部。');
+      narrative('但什么被限定了？','界限已经存在。');
     });
   });
 }
@@ -140,10 +151,7 @@ function finishCreation(){
   if(stage!==4||flow!=='drawing'||down||!ink.length)return;
   flow='object';canvas.style.cursor='default';$('primary').hidden=true;
   narrative('现在，有某物处在界限之内。');
-  later(COPY_FADE+2100,()=>{
-    flow='watcher';narrative('而你正在看着它。');
-    later(COPY_FADE+1500,()=>setStage(5));
-  });
+  later(COPY_FADE+2400,()=>setStage(5));
 }
 function tickStory(dt){
   storyClock+=dt*1000;
@@ -167,6 +175,8 @@ function tickStory(dt){
     camera={x:from.x+(to.x-from.x)*t,y:from.y+(to.y-from.y)*t,zoom:from.zoom+(to.zoom-from.zoom)*t};
     if(t>=1)cameraTween=null;
   }
+  if(seamAt!==null)$('seam').style.opacity=String(smooth((storyClock-seamAt)/1400));
+  if(namesAt!==null)$('views').style.opacity=String(smooth((storyClock-namesAt)/1800));
 }
 function button(text,fn){$('primary').textContent=text;$('primary').hidden=false;$('primary').onclick=fn}
 function resize(){
@@ -202,13 +212,13 @@ function start(p){
     if(!path.length||dist(path[path.length-1],pointer)>.004)path.push(stamped(pointer));
   }else if(stage===3){
     if(flow==='move'){
-      if(!inside(pointer)&&wallDistance(pointer)>.035){say('按住轮廓的内部，把整个轮廓拖向画面边缘。');return}
+      if(!inside(pointer)&&wallDistance(pointer)>.035)return;
       draggingOutline=true;canvas.style.cursor='grabbing';
     }else if(flow==='empty'){
       if(!inside(pointer))return;
       // This tap finds empty space. It is deliberately not the first mark of the next stage.
       flow='empty-tap';emptyPulse={...pointer,at:storyClock};
-      later(1000,()=>setStage(4));return;
+      later(1900,()=>setStage(4));return;
     }else return;
   }else if(stage===4&&flow==='drawing'){
     if(!inside(pointer)){say('把这一点或这一笔留在界限之内。');return}
@@ -267,7 +277,7 @@ function panAtEdge(dt){
   }else if(stage===3&&draggingOutline){
     outlinePan+=Math.hypot(dx,dy);
     if(outlinePan>=OUTLINE_DISCOVERY_DISTANCE&&!outlineDiscovered){
-      outlineDiscovered=true;say('还可以继续。松手，看看轮廓里面。');
+      outlineDiscovered=true;
     }
   }
 }
@@ -297,26 +307,22 @@ function closePath(){
   camera={x:0,y:0,zoom:1};trail=[];stroke=[];setStage(3);
 }
 canvas.addEventListener('pointerdown',e=>{
+  if(stage===5)return;
   if(activeId!==null)return;
   canvas.focus({preventScroll:true});
-  if(stage!==5)start(pos(e));else pointer={x:e.clientX,y:e.clientY};
+  start(pos(e));
   activeId=e.pointerId;canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener('pointermove',e=>{
   if(activeId!==null&&activeId!==e.pointerId)return;
   if(stage!==5)move(pos(e));
-  else if(activeId!==null){
-    player.a+=(e.clientX-pointer.x)*.007;
-    const dy=e.clientY-pointer.y;if(Math.abs(dy)>1)walk(-dy*.0008);
-    pointer={x:e.clientX,y:e.clientY};
-  }
 });
 canvas.addEventListener('pointerup',e=>{
   if(activeId!==e.pointerId)return;
   finish();releasePointer();
 });
 function cancelGesture(){
-  releasePointer();held.clear();
+  releasePointer();
   if(stage===4&&flow==='drawing'&&ink.length)button('保留这个形象',finishCreation);
 }
 canvas.addEventListener('pointercancel',cancelGesture);
@@ -334,11 +340,12 @@ $('undo').onclick=()=>{
 };
 function reset(){
   clearStory();releasePointer();camera={x:0,y:0,zoom:1};cameraTween=null;
-  path=[];stroke=[];ink=[];trail=[];held.clear();travel=0;
+  path=[];stroke=[];ink=[];trail=[];travel=0;
   pointer={x:.5,y:.4};split=.5;gridOpacity=0;outlinePan=0;outlineDiscovered=false;
   search={phase:'first',distance:0,time:0,touched:false};
   document.body.classList.remove('split');
-  ['views','seam','movement','reflection'].forEach(id=>$(id).hidden=true);
+  ['views','seam','reflection'].forEach(id=>$(id).hidden=true);
+  seamHeld=false;
   $('seam').style.left='50%';$('seam').setAttribute('aria-valuenow','50');
   $('views').style.gridTemplateColumns='1fr 1fr';$('help').hidden=false;setStage(0);
 }
@@ -365,15 +372,8 @@ $('seam').addEventListener('keydown',e=>{
     e.preventDefault();e.stopPropagation();setSplit(split+(e.key==='ArrowLeft'?-.025:.025));
   }
 });
-function walk(amount){
-  const p={x:player.x+Math.cos(player.a)*amount,y:player.y+Math.sin(player.a)*amount};
-  if(inside(p)&&wallDistance(p)>.012){player.x=p.x;player.y=p.y}
-  else if(Math.abs(amount)>.00001&&performance.now()>noticeUntil)say('活动没有消失，却在这里遇到了限制。');
-}
-const keys={ArrowUp:'forward',w:'forward',ArrowDown:'back',s:'back',ArrowLeft:'left',a:'left',ArrowRight:'right',d:'right'};
 window.addEventListener('keydown',e=>{
   if($('info').open||e.target.tagName==='BUTTON'||e.target===$('seam'))return;
-  if(stage===5&&keys[e.key]){e.preventDefault();held.add(keys[e.key]);return}
   if(stage===5||!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Enter'].includes(e.key))return;
   e.preventDefault();
   if(e.key===' '){
@@ -388,15 +388,8 @@ window.addEventListener('keydown',e=>{
       y:pointer.y+(e.key==='ArrowDown'?.025:0)-(e.key==='ArrowUp'?.025:0)});
   }
 });
-window.addEventListener('keyup',e=>held.delete(keys[e.key]));
 window.addEventListener('blur',cancelGesture);
 document.addEventListener('visibilitychange',()=>{cancelGesture();lastTime=0});
-document.querySelectorAll('[data-move]').forEach(b=>{
-  b.addEventListener('pointerdown',e=>{e.preventDefault();held.add(b.dataset.move);b.setPointerCapture(e.pointerId)});
-  ['pointerup','pointercancel','lostpointercapture'].forEach(t=>b.addEventListener(t,()=>held.delete(b.dataset.move)));
-  b.addEventListener('keydown',e=>{if(e.key===' '||e.key==='Enter')held.add(b.dataset.move)});
-  b.addEventListener('keyup',()=>held.delete(b.dataset.move));
-});
 function line(points,projector=project,closed=false,fill=false){
   if(!points.length)return;
   ctx.beginPath();points.forEach((p,i)=>{const q=projector(p);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});
@@ -407,38 +400,42 @@ function drawMark(points,projector=project){
   if(points.length===1){ctx.fillStyle=ctx.strokeStyle;dot(projector(points[0]),3.2)}
   else line(points,projector);
 }
-function ray(angle){
-  const r={x:Math.cos(angle),y:Math.sin(angle)};let nearest=5;
-  for(let i=0;i<path.length;i++){
-    const a=path[i],b=path[(i+1)%path.length],s={x:b.x-a.x,y:b.y-a.y},q={x:a.x-player.x,y:a.y-player.y};
-    const cross=r.x*s.y-r.y*s.x;if(Math.abs(cross)<1e-8)continue;
-    const t=(q.x*s.y-q.y*s.x)/cross,u=(q.x*r.y-q.y*r.x)/cross;
-    if(t>0&&u>=0&&u<=1)nearest=Math.min(nearest,t);
-  }
-  return nearest;
+// The very same drawing moves right; no second avatar or camera-world is created.
+function sceneProject(p,progress=1){
+  const b=bounds(),lo=project({x:b.minX,y:b.minY}),hi=project({x:b.maxX,y:b.maxY});
+  const width=Math.max(1,hi.x-lo.x),height=Math.max(1,hi.y-lo.y);
+  const scale=Math.min(1,Math.max(20,W*(1-split)-44)/width,drawBox().h/height);
+  const mid={x:(lo.x+hi.x)/2,y:(lo.y+hi.y)/2};
+  const q=project(p),target={x:W*(split+(1-split)/2)+(q.x-mid.x)*scale,y:mid.y+(q.y-mid.y)*scale};
+  return {x:q.x+(target.x-q.x)*progress,y:q.y+(target.y-q.y)*progress};
+}
+function drawScene(projector){
+  ctx.strokeStyle='#3b717c';ctx.fillStyle='#f1f7f8';ctx.lineWidth=2;
+  line(path,projector,true,true);
+  ctx.strokeStyle='#293f44';ink.forEach(s=>drawMark(s,projector));
 }
 function renderViews(){
-  const edge=W*split,top=145,bottom=H-(W<600?290:245),height=Math.max(100,bottom-top),horizon=top+height*.5;
-  ctx.save();ctx.beginPath();ctx.rect(16,top,Math.max(1,edge-32),height);ctx.clip();
-  ctx.fillStyle='#fafcfc';ctx.fillRect(0,horizon,edge,height);
-  for(let x=16;x<edge-16;x+=3){
-    const angle=((x-16)/(edge-32)-.5)*1.2,d=ray(player.a+angle)*Math.cos(angle);
-    const wall=Math.min(height*.9,height*.12/Math.max(.02,d)),shade=Math.round(251-Math.min(1,1/(d*3+1))*18);
-    ctx.fillStyle='rgb('+(shade-3)+','+shade+','+(shade+1)+')';ctx.fillRect(x,horizon-wall/2,3,wall);
-    ctx.fillStyle='#c1d1d3';ctx.fillRect(x,horizon+wall/2,3,1);
+  const t=unfolding?smooth((storyClock-unfolding.at)/unfolding.duration):1;
+  if(unfolding?.reduced&&t<1){
+    ctx.save();ctx.globalAlpha=1-t;drawScene(project);
+    ctx.globalAlpha=t;drawScene(p=>sceneProject(p));ctx.restore();
+  }else drawScene(p=>sceneProject(p,t));
+}
+function renderInterior(){
+  if(stage!==3||!(flow==='empty'||flow==='empty-tap'))return;
+  ctx.save();
+  ctx.beginPath();path.forEach((p,i)=>{const q=project(p);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});
+  ctx.closePath();ctx.clip();
+  if(flow==='empty'){
+    const breath=reducedMotion.matches?.035:.018+.025*(1+Math.sin(storyClock/1400))/2;
+    ctx.fillStyle='rgba(100,137,145,'+breath+')';ctx.fillRect(0,0,W,H);
+  }
+  if(emptyPulse){
+    const age=storyClock-emptyPulse.at,life=Math.min(1,age/1200),p=project(emptyPulse);
+    ctx.strokeStyle='rgba(100,137,145,'+(.22*(1-life)*(1-life))+')';ctx.lineWidth=1;
+    ctx.beginPath();ctx.arc(p.x,p.y,reducedMotion.matches?24:8+age*.045,0,Math.PI*2);ctx.stroke();
   }
   ctx.restore();
-  const b=bounds(),scale=Math.min((W-edge-48)/(b.maxX-b.minX),(height-30)/(b.maxY-b.minY));
-  const mx=(b.minX+b.maxX)/2,my=(b.minY+b.maxY)/2;
-  const map=p=>({x:edge+(W-edge)/2+(p.x-mx)*scale,y:top+height/2+(p.y-my)*scale});
-  ctx.strokeStyle='#839fa4';ctx.fillStyle='#f6f9f9';ctx.lineWidth=1.6;line(path,map,true,true);
-  const p=map(player);ctx.fillStyle='#2d6771';dot(p,3);ctx.strokeStyle='#8bacb2';
-  ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(p.x+Math.cos(player.a)*28,p.y+Math.sin(player.a)*28);ctx.stroke();
-  const all=ink.flat(),ib=bounds(all),ix=(ib.minX+ib.maxX)/2,iy=(ib.minY+ib.maxY)/2;
-  const extent=Math.max(...all.map(v=>Math.max(Math.abs(v.x-ix),Math.abs(v.y-iy))),.05);
-  const factor=Math.min(36,scale*.12)/(extent*2);
-  ctx.strokeStyle='#315f67';ctx.lineWidth=1.7;
-  ink.forEach(s=>drawMark(s,v=>({x:p.x+(v.x-ix)*factor,y:p.y+(v.y-iy)*factor})));
 }
 function renderGrid(){
   if(gridOpacity<.005)return;
@@ -453,10 +450,6 @@ function frame(t){
   const dt=Math.min(elapsed,.04);lastTime=t;
   if(!document.hidden&&!$('info').open){
     tickStory(elapsed);expireMarks(t);panAtEdge(dt);
-    if(stage===5){
-      if(held.has('left'))player.a-=dt*1.8;if(held.has('right'))player.a+=dt*1.8;
-      if(held.has('forward'))walk(dt*.17);if(held.has('back'))walk(-dt*.13);
-    }
   }
   ctx.clearRect(0,0,W,H);ctx.lineCap='round';ctx.lineJoin='round';
   const gridTarget=stage===3&&(flow==='move'||flow==='unbounded')?.35:0;
@@ -477,12 +470,7 @@ function frame(t){
       ctx.strokeStyle='#adc4c9';ctx.lineWidth=1;ctx.beginPath();const p=project(path[0]);
       ctx.arc(p.x,p.y,14,0,Math.PI*2);ctx.stroke();ctx.globalAlpha=1;
     }
-    if(emptyPulse){
-      const elapsed=storyClock-emptyPulse.at;
-      ctx.strokeStyle='rgba(100,137,145,'+(.3*(1-Math.min(1,elapsed/850)))+')';
-      ctx.lineWidth=1;const p=project(emptyPulse);ctx.beginPath();
-      ctx.arc(p.x,p.y,8+elapsed*.025,0,Math.PI*2);ctx.stroke();
-    }
+    renderInterior();
     ctx.strokeStyle='#3b717c';ctx.lineWidth=2;drawMark(stroke);
     ctx.strokeStyle='#293f44';ink.forEach(s=>drawMark(s));
     if(down&&stage<3){ctx.fillStyle='#315e68';dot(project(pointer),2)}
