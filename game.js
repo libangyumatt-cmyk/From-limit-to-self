@@ -3,14 +3,14 @@ const $ = id => document.getElementById(id);
 const canvas = $('field'), ctx = canvas.getContext('2d');
 const labels = ['活动', '探索', '界限', '轮廓', '创造', '视角'];
 const MARK_HOLD = 3000, MARK_LIFE = 12000, DISCOVERY_DISTANCE = .12;
-const COPY_FADE = 1350, CREATION_PAUSE = 3000;
+const COPY_FADE = 1350;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let W=0, H=0, dpr=1, stage=0, flow='', path=[], ink=[], stroke=[], trail=[];
 let down=false, activeId=null, split=.5, player={x:.5,y:.4,a:-Math.PI/2};
 let pointer={x:.5,y:.4}, travel=0, lastTime=0, held=new Set(), noticeUntil=0;
 let camera={x:0,y:0,zoom:1}, cameraTween=null, draggingOutline=false;
 let outlinePan=0, outlineDiscovered=false, gridOpacity=0, emptyPulse=null;
-let storyClock=0, storyTasks=[], copyBlend=null, settleAt=null;
+let storyClock=0, storyTasks=[], copyBlend=null;
 
 const stamped = p => ({...p,t:performance.now()});
 const opacity = (p,t) => Math.max(0,Math.min(1,(MARK_LIFE-(t-p.t))/(MARK_LIFE-MARK_HOLD)));
@@ -57,7 +57,7 @@ function say(text){
   $('notice').textContent=text;noticeUntil=performance.now()+3800;
 }
 function later(ms,action){storyTasks.push({at:storyClock+ms,action})}
-function clearStory(){storyTasks=[];settleAt=null}
+function clearStory(){storyTasks=[]}
 function narrative(title,eyebrow='',hint='',animate=true){
   const copy=$('copy'),ghost=$('copy-ghost');
   if(animate&&!reducedMotion.matches){
@@ -100,7 +100,7 @@ function setStage(s,preserveGesture=false){
   }
   if(s===4){
     flow='drawing';pointer=center();$('undo').hidden=false;canvas.style.cursor='crosshair';
-    narrative('给这个界限一个位置。','','在里面画一个点、符号或人。可以分几笔；停笔片刻，让它留下来。');
+    narrative('给这个界限一个位置。','','在里面画一个点、符号或人。可以分几笔；完成后，选择“保留这个形象”。');
   }
   if(s===5){
     flow='views';canvas.style.cursor='default';
@@ -128,7 +128,7 @@ function revealEmptyInterior(){
 }
 function finishCreation(){
   if(stage!==4||flow!=='drawing'||down||!ink.length)return;
-  settleAt=null;flow='object';canvas.style.cursor='default';
+  flow='object';canvas.style.cursor='default';$('primary').hidden=true;
   narrative('现在，有某物处在界限之内。');
   later(COPY_FADE+2100,()=>{
     flow='watcher';narrative('而你正在看着它。');
@@ -157,7 +157,6 @@ function tickStory(dt){
     camera={x:from.x+(to.x-from.x)*t,y:from.y+(to.y-from.y)*t,zoom:from.zoom+(to.zoom-from.zoom)*t};
     if(t>=1)cameraTween=null;
   }
-  if(settleAt!==null&&storyClock>=settleAt&&!down)finishCreation();
 }
 function button(text,fn){$('primary').textContent=text;$('primary').hidden=false;$('primary').onclick=fn}
 function resize(){
@@ -203,7 +202,7 @@ function start(p){
     }else return;
   }else if(stage===4&&flow==='drawing'){
     if(!inside(pointer)){say('把这一点或这一笔留在界限之内。');return}
-    settleAt=null;stroke=[pointer];
+    $('primary').hidden=true;stroke=[pointer];
   }else return;
   down=true;
 }
@@ -260,7 +259,7 @@ function finish(){
     if(outlineDiscovered)revealEmptyInterior();
   }else if(stage===4&&flow==='drawing'){
     if(stroke.length)ink.push(stroke);stroke=[];
-    if(ink.length)settleAt=storyClock+CREATION_PAUSE;
+    if(ink.length)button('保留这个形象',finishCreation);
   }else stroke=[];
 }
 function closePath(){
@@ -291,7 +290,7 @@ canvas.addEventListener('pointerup',e=>{
 });
 function cancelGesture(){
   releasePointer();held.clear();
-  if(stage===4&&flow==='drawing'&&ink.length)settleAt=storyClock+CREATION_PAUSE;
+  if(stage===4&&flow==='drawing'&&ink.length)button('保留这个形象',finishCreation);
 }
 canvas.addEventListener('pointercancel',cancelGesture);
 canvas.addEventListener('lostpointercapture',()=>{
@@ -353,9 +352,9 @@ window.addEventListener('keydown',e=>{
     if(down)finish();else start(pointer);
   }else if(e.key==='Enter'){
     // Completing a boundary must not also skip the freshly entered narrative.
-    const before=stage;finish();
+    const before=stage, wasDown=down;finish();
     if(before===2&&stage===2)closePath();
-    else if(before===4&&stage===4)finishCreation();
+    else if(before===4&&stage===4&&!wasDown)finishCreation();
   }else{
     move({x:pointer.x+(e.key==='ArrowRight'?.025:0)-(e.key==='ArrowLeft'?.025:0),
       y:pointer.y+(e.key==='ArrowDown'?.025:0)-(e.key==='ArrowUp'?.025:0)});
