@@ -14,9 +14,7 @@ let outlinePan=0, outlineDiscovered=false, gridOpacity=0, emptyPulse=null;
 let storyClock=0, storyTasks=[], copyBlend=null;
 let search={phase:'first',distance:0,time:0,touched:false};
 let unfolding=null, seamAt=null, namesAt=null;
-const routeNames=['活动','限定','自我直观','感觉','规定','创造性直观'];
-let routeIndex=0,routeUnlocked=0;
-const routeSnapshots=Array(routeNames.length).fill(null);
+let limitUnlocked=false;
 
 const stamped = p => ({...p,t:performance.now()});
 const opacity = (p,t) => Math.max(0,Math.min(1,(MARK_LIFE-(t-p.t))/(MARK_LIFE-MARK_HOLD)));
@@ -75,48 +73,22 @@ function narrative(title,eyebrow='',hint='',animate=true){
   $('eyebrow').textContent=eyebrow;$('eyebrow').hidden=!eyebrow;
   $('hint').textContent=hint;$('hint').hidden=!hint;
 }
-function saveRoute(index,state={stage,path,ink,camera}){
-  routeSnapshots[index]=JSON.parse(JSON.stringify(state));
-}
 function showRoute(){
-  $('chapter').textContent='最初限定 · '+routeNames[routeIndex];
-  document.querySelectorAll('[data-route]').forEach(node=>{
-    const index=Number(node.dataset.route),ready=index<=routeUnlocked;
-    node.disabled=!ready;node.textContent=ready?routeNames[index]:'？';
-    node.classList.toggle('is-locked',!ready);
-    node.classList.toggle('is-current',index===routeIndex);
-    node.setAttribute('aria-current',index===routeIndex?'step':'false');
+  $('chapter').textContent=limitUnlocked?'《先验观念论体系》 · 限定':'《先验观念论体系》 · 交互序章';
+  document.querySelectorAll('[data-route="limitation"]').forEach(node=>{
+    node.disabled=!limitUnlocked;node.textContent=limitUnlocked?'限定':'？';
+    node.classList.toggle('is-locked',!limitUnlocked);
+    node.classList.toggle('is-current',limitUnlocked);
+    node.setAttribute('aria-current',limitUnlocked?'page':'false');
   });
-  $('route-marker').textContent='↑ 你已经到这里';
-  $('route-marker').style.gridColumn=String(routeIndex+1);
-  $('route-status').textContent='已走过的部分可以重新进入。尚未抵达的部分仍留在问号里。';
+  $('route-marker').textContent=limitUnlocked?'↑ 本章已完成，可以重新进入':'限定将在两个观看位置显现后解锁';
+  $('route-status').textContent=limitUnlocked?'点击“限定”从头重走这一章节。':'这一章仍在展开。';
 }
-function setRoute(index,state){
-  routeIndex=index;routeUnlocked=Math.max(routeUnlocked,index);
-  if(state)saveRoute(index,state);
-  showRoute();
-}
-function replayRoute(index){
-  if(index>routeUnlocked)return;
-  $('info').close();routeIndex=index;showRoute();
-  if(index===0){reset();return}
-  clearStory();releasePointer();camera={x:0,y:0,zoom:1};cameraTween=null;
-  if(index===1){path=[];ink=[];trail=[];setStage(2);return}
-  const saved=routeSnapshots[index]||routeSnapshots[index===5?4:2];
-  if(!saved)return;
-  path=JSON.parse(JSON.stringify(saved.path||[]));
-  ink=JSON.parse(JSON.stringify(saved.ink||[]));
-  camera={...(saved.camera||{x:0,y:0,zoom:1})};trail=[];
-  if(index===2){setStage(3);return}
-  if(index===3){setStage(4);return}
-  if(index===4){
-    setStage(4);setRoute(4);flow='object';canvas.style.cursor='default';
-    narrative('现在，有某物处在界限之内。');
-    later(COPY_FADE+2400,()=>setStage(5));return;
-  }
-  setStage(5);setRoute(5);
-}
-document.querySelectorAll('[data-route]').forEach(node=>node.addEventListener('click',()=>replayRoute(Number(node.dataset.route))));
+function unlockLimitation(){limitUnlocked=true;showRoute()}
+document.querySelectorAll('[data-route="limitation"]').forEach(node=>node.addEventListener('click',()=>{
+  if(!limitUnlocked)return;
+  $('info').close();reset();
+}));
 function releasePointer(){
   if(activeId!==null&&canvas.hasPointerCapture(activeId))canvas.releasePointerCapture(activeId);
   activeId=null;down=false;draggingOutline=false;stroke=[];
@@ -126,10 +98,7 @@ function setStage(s,preserveGesture=false){
   unfolding=null;seamAt=null;namesAt=null;
   $('game').dataset.stage=String(s);$('primary').hidden=true;$('undo').hidden=true;
   $('phase').textContent=String(s+1).padStart(2,'0')+' · '+labels[s];
-  if(s===0){routeIndex=0;showRoute()}
-  if(s===1)showRoute();
-  if(s===2)setRoute(1);
-  if(s===3)setRoute(2,{stage:3,path,ink:[],camera:{x:0,y:0,zoom:1}});
+  if(s===0)showRoute();
   $('notice').textContent='';noticeUntil=0;
   if(s===0)narrative('先动起来。','还没有一个形状替你作答','移动鼠标，或用手指划过空白。',false);
   if(s===1){
@@ -155,11 +124,10 @@ function setStage(s,preserveGesture=false){
     });
   }
   if(s===4){
-    flow='drawing';setRoute(3,{stage:4,path,ink:[],camera});pointer=center();$('undo').hidden=false;canvas.style.cursor='crosshair';
+    flow='drawing';pointer=center();$('undo').hidden=false;canvas.style.cursor='crosshair';
     narrative('给这个界限一个位置。','','在里面画一个点、符号或人。可以分几笔；完成后，选择“保留这个形象”。');
   }
   if(s===5){
-    if(routeIndex<4)setRoute(4,{stage:4,path,ink,camera});
     flow='opening';canvas.style.cursor='default';
     const duration=reducedMotion.matches?900:6200;
     unfolding={at:storyClock,duration,reduced:reducedMotion.matches};
@@ -168,13 +136,13 @@ function setStage(s,preserveGesture=false){
     $('views').style.opacity='0';$('seam').style.opacity='0';
     narrative('');
     later(duration,()=>{
-      flow='watcher';seamAt=storyClock;$('seam').hidden=false;
+      flow='watcher';seamAt=storyClock;$('seam').hidden=false;unlockLimitation();
       later(1000,()=>{
         narrative('而你正在看着它。');
         later(COPY_FADE+2000,()=>{
           namesAt=storyClock;$('views').hidden=false;
           later(2600,()=>{
-            flow='views';setRoute(5,{stage:5,path,ink,camera});narrative('你正在看。');
+            flow='views';narrative('你正在看。');
             button('回看刚才发生了什么',()=>$('info').showModal());
           });
         });
@@ -199,7 +167,7 @@ function revealEmptyInterior(){
 }
 function finishCreation(){
   if(stage!==4||flow!=='drawing'||down||!ink.length)return;
-  flow='object';setRoute(4,{stage:4,path,ink,camera});canvas.style.cursor='default';$('primary').hidden=true;
+  flow='object';canvas.style.cursor='default';$('primary').hidden=true;
   narrative('现在，有某物处在界限之内。');
   later(COPY_FADE+2400,()=>setStage(5));
 }
