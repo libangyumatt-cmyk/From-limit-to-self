@@ -159,7 +159,7 @@ function setStage(s,preserveGesture=false){
         later(COPY_FADE+2000,()=>{
           namesAt=storyClock;$('views').hidden=false;
           later(2600,()=>{
-            flow='views';activeChapter='intuition';showRoute();narrative('你正在看。');
+            flow='views';activeChapter='intuition';showRoute();narrative('');
             sensing={position:center(),input:null,marks:[],hits:[],count:0,armed:true,lastHit:-Infinity,moved:0,quiet:false};
           });
         });
@@ -525,7 +525,10 @@ function senseMove(dx,dy){
   if(hit&&sensing.armed&&storyClock-sensing.lastHit>500){
     sensing.armed=false;sensing.lastHit=storyClock;sensing.count++;
     sensing.hits.push({x:hit.x,y:hit.y,at:storyClock,angle:Math.atan2(dy,dx)});
-    if(sensing.count===3)narrative('这里有什么。');
+    if(sensing.count===3){
+      narrative('这里有什么。');
+      later(COPY_FADE+1000,()=>narrative('你正在看。'));
+    }
   }
 }
 function renderSensing(){
