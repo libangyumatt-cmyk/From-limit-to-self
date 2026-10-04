@@ -16,7 +16,7 @@ let search={phase:'first',distance:0,time:0,touched:false};
 let unfolding=null, seamAt=null, namesAt=null;
 let limitUnlocked=false;
 let activeChapter='activity';
-let sensing=null;
+let sensing=null, heads=null;
 
 const stamped = p => ({...p,t:performance.now()});
 const opacity = (p,t) => Math.max(0,Math.min(1,(MARK_LIFE-(t-p.t))/(MARK_LIFE-MARK_HOLD)));
@@ -109,11 +109,12 @@ function releasePointer(){
   if(activeId!==null&&canvas.hasPointerCapture(activeId))canvas.releasePointerCapture(activeId);
   activeId=null;down=false;draggingOutline=false;stroke=[];
   if(sensing)sensing.input=null;
+  if(heads){heads.current=[];heads.drawing=false}
 }
 function setStage(s,preserveGesture=false){
-  clearStory();if(!preserveGesture)releasePointer();stage=s;flow='';emptyPulse=null;sensing=null;
+  clearStory();if(!preserveGesture)releasePointer();stage=s;flow='';emptyPulse=null;sensing=null;heads=null;
   unfolding=null;seamAt=null;namesAt=null;
-  $('game').dataset.stage=String(s);$('primary').hidden=true;$('undo').hidden=true;
+  $('game').dataset.stage=String(s);$('primary').hidden=true;$('undo').hidden=true;$('head-retry').hidden=true;
   $('phase').textContent=String(s+1).padStart(2,'0')+' · '+labels[s];
   if(s===0)showRoute();
   $('notice').textContent='';noticeUntil=0;
@@ -196,6 +197,7 @@ function tickStory(dt){
     if(!storyTasks.length||storyTasks[0].at>storyClock)break;
     storyTasks.shift().action();
   }
+  if(heads)tickHeads(dt);
   if(copyBlend){
     const elapsed=storyClock-copyBlend.at;
     $('copy-ghost').style.opacity=String(1-smooth(elapsed/520));
@@ -347,6 +349,11 @@ function closePath(){
 }
 canvas.addEventListener('pointerdown',e=>{
   if(stage===5){
+    if(heads){
+      if(activeId!==null||flow!=='head-drawing')return;
+      const p=headPoint(e);if(!p)return;
+      canvas.focus({preventScroll:true});activeId=e.pointerId;canvas.setPointerCapture(e.pointerId);headStart(p);return;
+    }
     if(!sensing||activeId!==null||e.clientX-canvas.getBoundingClientRect().left>=W*split)return;
     canvas.focus({preventScroll:true});activeId=e.pointerId;canvas.setPointerCapture(e.pointerId);senseInput(e);return;
   }
@@ -357,16 +364,18 @@ canvas.addEventListener('pointerdown',e=>{
 });
 canvas.addEventListener('pointermove',e=>{
   if(activeId!==null&&activeId!==e.pointerId)return;
-  if(stage===5)senseInput(e);else move(pos(e));
+  if(heads){canvas.style.cursor=flow==='head-drawing'?'crosshair':'default';if(heads.drawing)headMove(headPoint(e,true));}
+  else if(stage===5)senseInput(e);else move(pos(e));
 });
 canvas.addEventListener('pointerup',e=>{
   if(activeId!==e.pointerId)return;
-  finish();releasePointer();
+  if(heads)headEnd();else finish();releasePointer();
 });
 canvas.addEventListener('pointerleave',()=>{if(sensing)sensing.input=null;canvas.style.cursor=stage===5?'default':canvas.style.cursor});
 function cancelGesture(){
   releasePointer();
   if(stage===4&&flow==='drawing'&&ink.length)button('保留这个形象',finishCreation);
+  if(heads&&flow==='head-drawing'&&heads.ink.length)headAction();
 }
 canvas.addEventListener('pointercancel',cancelGesture);
 canvas.addEventListener('lostpointercapture',()=>{
@@ -374,6 +383,7 @@ canvas.addEventListener('lostpointercapture',()=>{
   if(down)cancelGesture();
 });
 $('undo').onclick=()=>{
+  if(heads&&flow==='head-drawing'){releasePointer();heads.ink=[];$('primary').hidden=true;return}
   if(stage===4){ink=[];stroke=[];setStage(4)}
   else if(stage===2||stage===3){
     path=[];stroke=[];ink=[];trail=[];cameraTween=null;
@@ -421,6 +431,7 @@ $('seam').addEventListener('keydown',e=>{
 window.addEventListener('keydown',e=>{
   if($('info').open||e.target.tagName==='BUTTON'||e.target===$('seam'))return;
   if(stage===5){
+    if(heads){headKey(e);return}
     if(sensing&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){
       e.preventDefault();sensing.input=null;
       senseMove((e.key==='ArrowRight'?12:0)-(e.key==='ArrowLeft'?12:0),(e.key==='ArrowDown'?12:0)-(e.key==='ArrowUp'?12:0));
@@ -468,6 +479,7 @@ function drawScene(projector){
   ctx.strokeStyle='#293f44';ink.forEach(s=>drawMark(s,projector));
 }
 function renderViews(){
+  if(heads){renderHeads();return}
   const t=unfolding?smooth((storyClock-unfolding.at)/unfolding.duration):1;
   if(unfolding?.reduced&&t<1){
     ctx.save();ctx.globalAlpha=1-t;drawScene(project);
@@ -529,7 +541,10 @@ function senseMove(dx,dy){
     if(sensing.count===1)sensing.bridge=contact;
     if(sensing.count===3){
       narrative('这里有什么。');
-      later(COPY_FADE+1000,()=>narrative('你正在看。'));
+      later(COPY_FADE+1000,()=>{
+        narrative('你正在看。');
+        later(COPY_FADE+2200,beginHeads);
+      });
     }
   }
 }
@@ -606,6 +621,150 @@ function renderSensing(){
     }else sensing.bridge=null;
   }
 }
+// Each attempt to draw the watcher becomes another watched figure.
+function beginHeads(){
+  releasePointer();sensing=null;flow='head-drawing';
+  heads={base:center(),ink:[],current:[],drawing:false,cursor:{x:.5,y:.5},stack:[],total:0,transfer:null,camera:0,auto:false,paused:false,nextAt:0};
+  $('primary').hidden=true;$('undo').hidden=false;canvas.style.cursor='crosshair';
+  narrative('但正在看的你在哪里？','','给正在看的你一个形象。');
+}
+function headArea(){
+  const top=Math.max(150,H*.20),bottom=Math.max(top+90,H*.56);
+  return {x:24,y:top,w:Math.max(36,W*split-48),h:bottom-top};
+}
+function headPoint(e,clamp=false){
+  const rect=canvas.getBoundingClientRect(),a=headArea();
+  const x=(e.clientX-rect.left-a.x)/a.w,y=(e.clientY-rect.top-a.y)/a.h;
+  if(!clamp&&(x<0||x>1||y<0||y>1))return null;
+  return {x:Math.max(0,Math.min(1,x)),y:Math.max(0,Math.min(1,y))};
+}
+function headSource(p){const a=headArea();return {x:a.x+p.x*a.w,y:a.y+p.y*a.h}}
+function headStart(p){
+  if(flow!=='head-drawing')return;
+  heads.cursor=p;heads.current=[p];heads.drawing=true;$('primary').hidden=true;
+}
+function headMove(p){
+  if(!p||!heads.drawing)return;
+  heads.cursor=p;
+  if(dist(headSource(p),headSource(heads.current.at(-1)))>2)heads.current.push(p);
+}
+function headEnd(){
+  if(!heads.drawing)return;
+  if(heads.current.length)heads.ink.push(heads.current);
+  heads.current=[];heads.drawing=false;
+  if(heads.ink.length)headAction();
+}
+function headAction(){button('这就是正在看的我',captureHead)}
+function headKey(e){
+  if(flow!=='head-drawing')return;
+  if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' ','Enter'].includes(e.key))return;
+  e.preventDefault();
+  if(e.key==='Enter'){if(heads.drawing)headEnd();else captureHead();return}
+  if(e.key===' '){if(heads.drawing)headEnd();else headStart({...heads.cursor});return}
+  const p={x:Math.max(0,Math.min(1,heads.cursor.x+(e.key==='ArrowRight'?.04:0)-(e.key==='ArrowLeft'?.04:0))),
+    y:Math.max(0,Math.min(1,heads.cursor.y+(e.key==='ArrowDown'?.04:0)-(e.key==='ArrowUp'?.04:0)))};
+  if(heads.drawing)headMove(p);else heads.cursor=p;
+}
+function normalizeHead(strokes){
+  const points=strokes.flat().map(headSource),b=bounds(points),size=Math.max(20,b.maxX-b.minX,b.maxY-b.minY);
+  const cx=(b.minX+b.maxX)/2,cy=(b.minY+b.maxY)/2;
+  return strokes.map(s=>s.map(p=>{const q=headSource(p);return {x:(q.x-cx)/size,y:(q.y-cy)/size}}));
+}
+function captureHead(){
+  if(!heads||flow!=='head-drawing'||heads.drawing||!heads.ink.length)return;
+  const shape=normalizeHead(heads.ink),index=++heads.total;
+  const node={shape,index,at:storyClock};heads.stack.push(node);
+  heads.transfer={node,source:heads.ink,at:storyClock,duration:reducedMotion.matches?1000:Math.max(1100,2700-index*500)};
+  heads.ink=[];flow='head-transfer';canvas.style.cursor='default';
+  $('primary').hidden=true;$('undo').hidden=true;narrative('');
+  later(heads.transfer.duration,()=>{
+    heads.transfer=null;flow='head-still';
+    narrative(index===1?'现在，你看见它了。':'它也成了你所看见的。');
+    later(COPY_FADE+(index===1?1800:1000),()=>{
+      narrative('那么，是谁在看？');
+      if(index<3){flow='head-drawing';canvas.style.cursor='crosshair';$('undo').hidden=false;heads.cursor={x:.5,y:.5}}
+      else later(COPY_FADE+1800,startHeadGrowth);
+    });
+  });
+}
+function startHeadGrowth(){
+  flow='head-growing';heads.auto=true;heads.nextAt=storyClock+1400;narrative('');
+  button('停留片刻',toggleHeadGrowth);$('undo').hidden=true;
+  // A separate replay action never reassigns the existing outline's undo behavior.
+  $('head-retry').hidden=false;
+}
+function toggleHeadGrowth(){
+  if(!heads?.auto)return;
+  heads.paused=!heads.paused;
+  if(heads.paused)heads.pausedAt=storyClock;
+  else {heads.stack.forEach(n=>n.at+=storyClock-heads.pausedAt);heads.nextAt=storyClock+900;}
+  $('primary').textContent=heads.paused?'继续生长':'停留片刻';
+}
+function headLayout(){
+  const base=sceneProject(heads.base),size=Math.max(24,Math.min(68,W*(1-split)*.42,H*.10));
+  return {base,size,gap:size*1.38,ceiling:Math.max(182,H*.31)};
+}
+function tickHeads(dt){
+  if(heads.auto&&!heads.paused&&storyClock>=heads.nextAt){
+    const shape=heads.stack.at(-1).shape;
+    heads.stack.push({shape,index:++heads.total,at:storyClock});
+    // The chain continues indefinitely while only nearby heads remain in memory.
+    heads.stack=heads.stack.slice(-14);
+    heads.nextAt=storyClock+(reducedMotion.matches?1800:Math.max(320,1400*Math.pow(.82,heads.total-3)));
+  }
+  if(heads.paused)return;
+  const l=headLayout(),target=Math.max(0,heads.total*l.gap-(l.base.y-l.ceiling));
+  heads.camera+=(target-heads.camera)*(1-Math.exp(-Math.min(dt,.08)*(reducedMotion.matches?12:3.1)));
+}
+function headTarget(node,l){return {x:l.base.x,y:l.base.y-node.index*l.gap+heads.camera}}
+function paintHead(shape,projector,alpha=1){
+  ctx.save();ctx.globalAlpha=alpha;ctx.strokeStyle='#416b75';ctx.fillStyle='#416b75';ctx.lineWidth=1.65;
+  shape.forEach(s=>drawMark(s,projector));ctx.restore();
+}
+function renderHeads(){
+  const l=headLayout(),a=headArea();
+  ctx.save();ctx.beginPath();ctx.rect(W*split,145,W*(1-split),Math.max(120,H*.59-145));ctx.clip();
+  ctx.save();ctx.translate(0,heads.camera);drawScene(p=>sceneProject(p));ctx.restore();
+  for(const node of heads.stack){
+    if(heads.transfer?.node===node)continue;
+    const p=headTarget(node,l),reveal=heads.auto?smooth(((heads.paused?heads.pausedAt:storyClock)-node.at)/(reducedMotion.matches?900:550)):1;
+    if(p.y+l.gap<145||p.y-l.size>H*.59)continue;
+    ctx.strokeStyle='rgba(87,125,136,.26)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(p.x,p.y+l.gap-l.size*.45);ctx.lineTo(p.x,p.y+l.size*.55);ctx.stroke();
+    ctx.save();
+    if(!reducedMotion.matches){ctx.beginPath();ctx.rect(p.x-l.size,p.y+l.size*.6-l.size*1.2*reveal,l.size*2,l.size*1.2*reveal);ctx.clip()}
+    paintHead(node.shape,q=>({x:p.x+q.x*l.size,y:p.y+q.y*l.size}),reducedMotion.matches?reveal:1);
+    ctx.restore();
+  }
+  ctx.restore();
+  if(heads.transfer){
+    const tr=heads.transfer,t=Math.min(1,(storyClock-tr.at)/tr.duration),p=headTarget(tr.node,l);
+    ctx.save();ctx.beginPath();ctx.rect(0,145,W*split,H*.59-145);ctx.clip();
+    paintHead(tr.source,headSource,1-smooth((t-.2)/.55));ctx.restore();
+    ctx.save();ctx.beginPath();ctx.rect(W*split,145,W*(1-split),H*.59-145);ctx.clip();
+    const settle=reducedMotion.matches?0:Math.sin(t*15)*5*(1-t);
+    paintHead(tr.node.shape,q=>({x:p.x+q.x*l.size+settle,y:p.y+q.y*l.size}),smooth((t-.12)/.7));
+    if(!reducedMotion.matches)paintHead(tr.node.shape,q=>({x:p.x+q.x*l.size-settle*1.8,y:p.y+q.y*l.size}),.16*Math.sin(t*Math.PI));
+    ctx.restore();
+    if(!reducedMotion.matches){
+      const sourcePoints=tr.source.flat().map(headSource),b=bounds(sourcePoints),origin={x:(b.minX+b.maxX)/2,y:(b.minY+b.maxY)/2};
+      ctx.strokeStyle='rgba(89,132,143,'+(.27*Math.sin(t*Math.PI))+')';ctx.lineWidth=.8;
+      ctx.beginPath();ctx.moveTo(origin.x,origin.y);ctx.quadraticCurveTo(W*split,(origin.y+p.y)/2+settle,p.x,p.y);ctx.stroke();
+    }
+  }
+  if(flow==='head-drawing'){
+    ctx.save();ctx.beginPath();ctx.rect(0,145,W*split,H*.59-145);ctx.clip();
+    paintHead(heads.ink,headSource);paintHead([heads.current],headSource);
+    // A faint breathing point keeps the empty side available without drawing a watcher for the player.
+    const p=headSource(heads.cursor),alpha=reducedMotion.matches?.12:.09+.05*Math.sin(storyClock/900);
+    ctx.fillStyle='rgba(92,135,146,'+alpha+')';dot(p,2.3);ctx.restore();
+  }
+}
+const headRetry=document.createElement('button');
+headRetry.id='head-retry';headRetry.textContent='再试一次';headRetry.hidden=true;
+headRetry.onclick=()=>{clearStory();headRetry.hidden=true;beginHeads()};
+$('actions').append(headRetry);
+
 function renderInterior(){
   if(stage!==3||!(flow==='empty'||flow==='empty-tap'))return;
   ctx.save();
