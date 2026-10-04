@@ -350,9 +350,10 @@ function closePath(){
 canvas.addEventListener('pointerdown',e=>{
   if(stage===5){
     if(heads){
-      if(activeId!==null||flow!=='head-drawing')return;
+      if(activeId!==null||$('info').open)return;
       const p=headPoint(e);if(!p)return;
-      canvas.focus({preventScroll:true});activeId=e.pointerId;canvas.setPointerCapture(e.pointerId);headStart(p);return;
+      canvas.focus({preventScroll:true});activeId=e.pointerId;canvas.setPointerCapture(e.pointerId);headTrack(p);
+      if(flow==='head-drawing')headStart(p);return;
     }
     if(!sensing||activeId!==null||e.clientX-canvas.getBoundingClientRect().left>=W*split)return;
     canvas.focus({preventScroll:true});activeId=e.pointerId;canvas.setPointerCapture(e.pointerId);senseInput(e);return;
@@ -364,7 +365,11 @@ canvas.addEventListener('pointerdown',e=>{
 });
 canvas.addEventListener('pointermove',e=>{
   if(activeId!==null&&activeId!==e.pointerId)return;
-  if(heads){canvas.style.cursor=flow==='head-drawing'?'crosshair':'default';if(heads.drawing)headMove(headPoint(e,true));}
+  if(heads){
+    if($('info').open||seamHeld)return;
+    const p=headPoint(e,heads.drawing);headTrack(p);canvas.style.cursor=p?'none':'default';
+    if(heads.drawing)headMove(p);
+  }
   else if(stage===5)senseInput(e);else move(pos(e));
 });
 canvas.addEventListener('pointerup',e=>{
@@ -380,10 +385,10 @@ function cancelGesture(){
 canvas.addEventListener('pointercancel',cancelGesture);
 canvas.addEventListener('lostpointercapture',()=>{
   // Natural releases have already been finished; interruption discards only the active stroke.
-  if(down)cancelGesture();
+  if(down||heads?.drawing)cancelGesture();
 });
 $('undo').onclick=()=>{
-  if(heads&&flow==='head-drawing'){releasePointer();heads.ink=[];$('primary').hidden=true;return}
+  if(heads&&flow==='head-drawing'){releasePointer();heads.ink=[];heads.previewBox=null;$('primary').hidden=true;return}
   if(stage===4){ink=[];stroke=[];setStage(4)}
   else if(stage===2||stage===3){
     path=[];stroke=[];ink=[];trail=[];cameraTween=null;
@@ -531,6 +536,7 @@ function senseMove(dx,dy){
   const moved=Math.hypot((next.x-from.x)*scaleX,(next.y-from.y)*scaleY);
   const steps=Math.min(100,Math.ceil(moved/4));
   for(let i=1;i<=steps;i++)sensing.marks.push({x:from.x+(next.x-from.x)*i/steps,y:from.y+(next.y-from.y)*i/steps,at:storyClock});
+  if(steps)sensing.memoryMarks=[...(sensing.memoryMarks||[]),...sensing.marks.slice(-steps)].filter(p=>storyClock-p.at<12000).slice(-300);
   sensing.marks=sensing.marks.slice(-450);sensing.position=next;sensing.moved+=moved;
   if(!sensing.quiet&&sensing.moved>18){sensing.quiet=true;narrative('')}
   if(!hit&&wallDistance(next)*scale>10)sensing.armed=true;
@@ -623,8 +629,11 @@ function renderSensing(){
 }
 // Each attempt to draw the watcher becomes another watched figure.
 function beginHeads(){
+  const a=headArea(),residue=(sensing?.memoryMarks||sensing?.marks||[]).map(p=>{const q=senseProject(p);return {x:(q.x-a.x)/a.w,y:(q.y-a.y)/a.h,at:storyClock,weight:.45}});
+  const previous=sensing? senseProject(sensing.position):null;
   releasePointer();sensing=null;flow='head-drawing';
-  heads={base:center(),ink:[],current:[],drawing:false,cursor:{x:.5,y:.5},stack:[],total:0,transfer:null,camera:0,auto:false,paused:false,nextAt:0};
+  heads={base:center(),ink:[],current:[],drawing:false,cursor:{x:.5,y:.5},stack:[],total:0,transfer:null,camera:0,auto:false,paused:false,nextAt:0,activity:residue,activityAt:storyClock,pulseAt:-Infinity,previewBox:null,cursorVisible:false};
+  if(previous)heads.cursor={x:Math.max(0,Math.min(1,(previous.x-a.x)/a.w)),y:Math.max(0,Math.min(1,(previous.y-a.y)/a.h))};
   $('primary').hidden=true;$('undo').hidden=false;canvas.style.cursor='crosshair';
   narrative('但正在看的你在哪里？','','给正在看的你一个形象。');
 }
@@ -639,14 +648,22 @@ function headPoint(e,clamp=false){
   return {x:Math.max(0,Math.min(1,x)),y:Math.max(0,Math.min(1,y))};
 }
 function headSource(p){const a=headArea();return {x:a.x+p.x*a.w,y:a.y+p.y*a.h}}
+function headTrack(p){
+  heads.cursorVisible=!!p;if(!p)return;
+  const last=heads.activity.at(-1);
+  if(!last||dist(headSource(last),headSource(p))>2||storyClock-last.at>70){
+    heads.activity.push({...p,at:storyClock,weight:1});heads.activity=heads.activity.slice(-320);
+  }
+  heads.cursor=p;heads.activityAt=storyClock;
+}
 function headStart(p){
   if(flow!=='head-drawing')return;
-  heads.cursor=p;heads.current=[p];heads.drawing=true;$('primary').hidden=true;
+  headTrack(p);heads.current=[{...p,at:storyClock}];heads.drawing=true;$('primary').hidden=true;
 }
 function headMove(p){
   if(!p||!heads.drawing)return;
-  heads.cursor=p;
-  if(dist(headSource(p),headSource(heads.current.at(-1)))>2)heads.current.push(p);
+  headTrack(p);
+  if(dist(headSource(p),headSource(heads.current.at(-1)))>2)heads.current.push({...p,at:storyClock});
 }
 function headEnd(){
   if(!heads.drawing)return;
@@ -654,16 +671,15 @@ function headEnd(){
   heads.current=[];heads.drawing=false;
   if(heads.ink.length)headAction();
 }
-function headAction(){button('这就是正在看的我',captureHead)}
+function headAction(){button('就是这样',captureHead)}
 function headKey(e){
-  if(flow!=='head-drawing')return;
   if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' ','Enter'].includes(e.key))return;
   e.preventDefault();
   if(e.key==='Enter'){if(heads.drawing)headEnd();else captureHead();return}
-  if(e.key===' '){if(heads.drawing)headEnd();else headStart({...heads.cursor});return}
+  if(e.key===' '){if(heads.drawing)headEnd();else if(flow==='head-drawing')headStart({...heads.cursor});return}
   const p={x:Math.max(0,Math.min(1,heads.cursor.x+(e.key==='ArrowRight'?.04:0)-(e.key==='ArrowLeft'?.04:0))),
     y:Math.max(0,Math.min(1,heads.cursor.y+(e.key==='ArrowDown'?.04:0)-(e.key==='ArrowUp'?.04:0)))};
-  if(heads.drawing)headMove(p);else heads.cursor=p;
+  if(heads.drawing)headMove(p);else headTrack(p);
 }
 function normalizeHead(strokes){
   const points=strokes.flat().map(headSource),b=bounds(points),size=Math.max(20,b.maxX-b.minX,b.maxY-b.minY);
@@ -675,14 +691,14 @@ function captureHead(){
   const shape=normalizeHead(heads.ink),index=++heads.total;
   const node={shape,index,at:storyClock};heads.stack.push(node);
   heads.transfer={node,source:heads.ink,at:storyClock,duration:reducedMotion.matches?1000:Math.max(1100,2700-index*500)};
-  heads.ink=[];flow='head-transfer';canvas.style.cursor='default';
+  heads.ink=[];heads.previewBox=null;heads.pulseAt=storyClock;flow='head-transfer';canvas.style.cursor='default';
   $('primary').hidden=true;$('undo').hidden=true;narrative('');
   later(heads.transfer.duration,()=>{
     heads.transfer=null;flow='head-still';
     narrative(index===1?'现在，你看见它了。':'它也成了你所看见的。');
     later(COPY_FADE+(index===1?1800:1000),()=>{
       narrative('那么，是谁在看？');
-      if(index<3){flow='head-drawing';canvas.style.cursor='crosshair';$('undo').hidden=false;heads.cursor={x:.5,y:.5}}
+      if(index<3){flow='head-drawing';canvas.style.cursor='crosshair';$('undo').hidden=false}
       else later(COPY_FADE+1800,startHeadGrowth);
     });
   });
@@ -705,15 +721,25 @@ function headLayout(){
   return {base,size,gap:size*1.38,ceiling:Math.max(182,H*.31)};
 }
 function tickHeads(dt){
+  heads.activity=heads.activity.filter(p=>storyClock-p.at<(p.weight<1?6200:2100));
+  if(flow==='head-drawing'){
+    const strokes=[...heads.ink,heads.current].filter(s=>s.length);
+    if(strokes.length){
+      const b=bounds(strokes.flat().map(headSource)),target={x:(b.minX+b.maxX)/2,y:(b.minY+b.maxY)/2,size:Math.max(20,b.maxX-b.minX,b.maxY-b.minY)};
+      if(!heads.previewBox)heads.previewBox=target;
+      else for(const k of ['x','y','size'])heads.previewBox[k]+=(target[k]-heads.previewBox[k])*(1-Math.exp(-Math.min(dt,.08)*9));
+    }
+  }
   if(heads.auto&&!heads.paused&&storyClock>=heads.nextAt){
     const shape=heads.stack.at(-1).shape;
-    heads.stack.push({shape,index:++heads.total,at:storyClock});
+    heads.stack.push({shape,index:++heads.total,at:storyClock});heads.pulseAt=storyClock;
     // The chain continues indefinitely while only nearby heads remain in memory.
     heads.stack=heads.stack.slice(-14);
     heads.nextAt=storyClock+(reducedMotion.matches?1800:Math.max(320,1400*Math.pow(.82,heads.total-3)));
   }
   if(heads.paused)return;
-  const l=headLayout(),target=Math.max(0,heads.total*l.gap-(l.base.y-l.ceiling));
+  const l=headLayout(),preview=flow==='head-drawing'&&(heads.ink.length||heads.current.length)?1:0;
+  const target=Math.max(0,(heads.total+preview)*l.gap-(l.base.y-l.ceiling));
   heads.camera+=(target-heads.camera)*(1-Math.exp(-Math.min(dt,.08)*(reducedMotion.matches?12:3.1)));
 }
 function headTarget(node,l){return {x:l.base.x,y:l.base.y-node.index*l.gap+heads.camera}}
@@ -722,7 +748,8 @@ function paintHead(shape,projector,alpha=1){
   shape.forEach(s=>drawMark(s,projector));ctx.restore();
 }
 function renderHeads(){
-  const l=headLayout(),a=headArea();
+  const l=headLayout();
+  renderHeadActivity();
   ctx.save();ctx.beginPath();ctx.rect(W*split,145,W*(1-split),Math.max(120,H*.59-145));ctx.clip();
   ctx.save();ctx.translate(0,heads.camera);drawScene(p=>sceneProject(p));ctx.restore();
   for(const node of heads.stack){
@@ -740,7 +767,10 @@ function renderHeads(){
   if(heads.transfer){
     const tr=heads.transfer,t=Math.min(1,(storyClock-tr.at)/tr.duration),p=headTarget(tr.node,l);
     ctx.save();ctx.beginPath();ctx.rect(0,145,W*split,H*.59-145);ctx.clip();
-    paintHead(tr.source,headSource,1-smooth((t-.2)/.55));ctx.restore();
+    tr.source.forEach((stroke,i)=>{
+      const offset=.07+.34*i/Math.max(1,tr.source.length-1),fade=1-smooth((t-offset)/.48);
+      paintHead([stroke],q=>{const p=headSource(q);return {x:p.x,y:p.y+(reducedMotion.matches?0:5*(1-fade))}},fade);
+    });ctx.restore();
     ctx.save();ctx.beginPath();ctx.rect(W*split,145,W*(1-split),H*.59-145);ctx.clip();
     const settle=reducedMotion.matches?0:Math.sin(t*15)*5*(1-t);
     paintHead(tr.node.shape,q=>({x:p.x+q.x*l.size+settle,y:p.y+q.y*l.size}),smooth((t-.12)/.7));
@@ -753,12 +783,36 @@ function renderHeads(){
     }
   }
   if(flow==='head-drawing'){
+    renderHeadPreview(l);
     ctx.save();ctx.beginPath();ctx.rect(0,145,W*split,H*.59-145);ctx.clip();
     paintHead(heads.ink,headSource);paintHead([heads.current],headSource);
-    // A faint breathing point keeps the empty side available without drawing a watcher for the player.
-    const p=headSource(heads.cursor),alpha=reducedMotion.matches?.12:.09+.05*Math.sin(storyClock/900);
-    ctx.fillStyle='rgba(92,135,146,'+alpha+')';dot(p,2.3);ctx.restore();
+    ctx.restore();
   }
+}
+function renderHeadActivity(){
+  ctx.save();ctx.beginPath();ctx.rect(0,145,W*split,Math.max(120,H*.59-145));ctx.clip();
+  const age=(storyClock-heads.pulseAt)/1000;
+  const squeeze=reducedMotion.matches||heads.paused?0:Math.max(0,1-age/.34)*Math.sin(Math.min(1,age/.34)*Math.PI)*.20;
+  const anchor=headSource(heads.cursor);
+  for(const mark of heads.activity){
+    const life=mark.weight<1?6200:2100,fade=Math.max(0,1-(storyClock-mark.at)/life),p=headSource(mark);
+    ctx.fillStyle='rgba(87,132,145,'+(.23*mark.weight*fade*fade)+')';
+    dot({x:anchor.x+(p.x-anchor.x)*(1-squeeze),y:anchor.y+(p.y-anchor.y)*(1-squeeze)},1.8);
+  }
+  if(heads.cursorVisible||storyClock-heads.activityAt<2400){
+    ctx.fillStyle='rgba(74,119,132,'+(heads.drawing?.48:.23)+')';dot(anchor,heads.drawing?2.2:2.6);
+  }
+  ctx.restore();
+}
+function renderHeadPreview(l){
+  if(!heads.previewBox)return;
+  const delay=reducedMotion.matches?0:Math.max(65,230-heads.total*75),box=heads.previewBox;
+  const strokes=[...heads.ink,heads.current].map(s=>s.filter(p=>storyClock-p.at>=delay)).filter(s=>s.length);
+  if(!strokes.length)return;
+  const p=headTarget({index:heads.total+1},l);
+  ctx.save();ctx.beginPath();ctx.rect(W*split,145,W*(1-split),Math.max(120,H*.59-145));ctx.clip();
+  paintHead(strokes,q=>{const v=headSource(q);return {x:p.x+(v.x-box.x)/box.size*l.size,y:p.y+(v.y-box.y)/box.size*l.size}},.19);
+  ctx.restore();
 }
 const headRetry=document.createElement('button');
 headRetry.id='head-retry';headRetry.textContent='再试一次';headRetry.hidden=true;
